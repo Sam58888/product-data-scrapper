@@ -5,7 +5,7 @@ from rim import Rim
 import functions as fn
 
 # Std‑lib
-import csv, os
+import csv, os, sys
 from time import sleep
 from typing import List
 
@@ -19,20 +19,29 @@ from selenium.webdriver.support import expected_conditions as EC
 
 
 # ───────────────────────── helpers ─────────────────────────
-def startSelenium(headless: bool = False):
+def startSelenium(headless: bool = True):
     opts = Options()
+    # run headless but hide automation flags so portals think it's a real browser
     if headless:
-        opts.add_argument("headless")
-        opts.add_argument("--log-level=3")
-    opts.add_argument("--ignore-certificate-errors")
-    opts.add_argument("--disable-gpu")
+        opts.add_argument("--headless=new")
+    opts.add_argument(
+        "user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/137 Safari/537.36"
+    )
+    opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+    opts.add_experimental_option("useAutomationExtension", False)
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--window-size=1920,1080")
     return webdriver.Chrome(options=opts)
 
 
 def getKeystone(browser: webdriver):
-    wait = WebDriverWait(browser, 10)
+    wait = WebDriverWait(browser, 30)  # increased from 10 s
     browser.get("https://portal.lkqcorp.com")
+
+    # save what we actually received – shows up as artifact
+    browser.save_screenshot("login_page.png")
 
     wait.until(EC.visibility_of_element_located((By.ID, "username"))).send_keys(
         os.environ["LKQ_USERNAME"]
@@ -43,7 +52,7 @@ def getKeystone(browser: webdriver):
 
     # optional MFA
     try:
-        otp = WebDriverWait(browser, 5).until(
+        otp = WebDriverWait(browser, 8).until(
             EC.visibility_of_element_located((By.ID, "otp"))
         )
         otp.send_keys(input("Enter LKQ OTP code: "), Keys.ENTER)
@@ -52,7 +61,7 @@ def getKeystone(browser: webdriver):
 
 
 def hollanderField(browser: webdriver, hollander: str):
-    wait = WebDriverWait(browser, 10)
+    wait = WebDriverWait(browser, 20)
     search = wait.until(EC.element_to_be_clickable((By.XPATH, r'//*[@id="search-field"]')))
     search.clear()
     search.send_keys(hollander, Keys.ENTER)
@@ -60,7 +69,7 @@ def hollanderField(browser: webdriver, hollander: str):
 
 
 def stripInfo(browser: webdriver, rim: Rim):
-    wait = WebDriverWait(browser, 10)
+    wait = WebDriverWait(browser, 20)
 
     def matgrid(css: str) -> List[str]:
         grid = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, css)))
@@ -75,7 +84,7 @@ def stripInfo(browser: webdriver, rim: Rim):
         ).text.split(" ")
         rim.lugs, rim.bp, rim.size = dim[0], dim[2], dim[5]
     except Exception:
-        print(f"Failed dimension scrape for {rim.sku}")
+        print(f"Failed dimension scrape for {rim.sku}", file=sys.stderr)
 
     # fitment + description
     try:
@@ -90,7 +99,7 @@ def stripInfo(browser: webdriver, rim: Rim):
         ).text.split("\n")
         info = fn.validation([d[2:] for d in desc])
     except Exception:
-        print(f"No results for {rim.sku}")
+        print(f"No results for {rim.sku}", file=sys.stderr)
         info, fitment = [], []
 
     rim.finish, rim.style, rim.material, rim.width, rim.offset, rim.diameter = (
@@ -116,15 +125,19 @@ unmatchedFile = os.path.join(os.getcwd(), "data", "unmatchedRims.csv")
 allRims: List[Rim] = []
 hollanders: List[str] = []
 
-# ───────────────────────── read CSV (DictReader fixes header mismatch) ─────────────────────────
+# ───────────────────────── read CSV safely ─────────────────────────
 with open(inputFile, newline="") as f:
     for row in csv.DictReader(f):
         sku = row.get("sku", "").strip()
         if sku and sku not in hollanders:
             hollanders.append(sku)
 
+if not hollanders:
+    print("⚠️  input.csv had no SKUs – exiting.")
+    sys.exit(0)
+
 total = len(hollanders)
-browser = startSelenium(headless=False)
+browser = startSelenium(headless=True)
 getKeystone(browser)
 
 for idx, holl in enumerate(hollanders, start=1):
@@ -133,6 +146,8 @@ for idx, holl in enumerate(hollanders, start=1):
     hollanderField(browser, rim.sku)
     stripInfo(browser, rim)
     allRims.append(rim)
+
+browser.quit()
 
 # ───────────────────────── write results ─────────────────────────
 with open(outputFile, "w", newline="") as f:
