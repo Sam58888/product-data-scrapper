@@ -1,15 +1,11 @@
 # Rim Class Import
 from rim import Rim
-
-# Data validation and Formatting import
 import functions as fn
 
-# Std‑lib
 import csv, os, sys
 from time import sleep
 from typing import List
 
-# Selenium
 from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.options import Options
@@ -18,10 +14,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 
 
-# ───────────────────────── helpers ─────────────────────────
 def startSelenium(headless: bool = True):
     opts = Options()
-    # run headless but hide automation flags so portals think it's a real browser
     if headless:
         opts.add_argument("--headless=new")
     opts.add_argument(
@@ -37,10 +31,8 @@ def startSelenium(headless: bool = True):
 
 
 def getKeystone(browser: webdriver):
-    wait = WebDriverWait(browser, 30)  # increased from 10 s
+    wait = WebDriverWait(browser, 30)
     browser.get("https://portal.lkqcorp.com")
-
-    # save what we actually received – shows up as artifact
     browser.save_screenshot("login_page.png")
 
     wait.until(EC.visibility_of_element_located((By.ID, "username"))).send_keys(
@@ -49,15 +41,6 @@ def getKeystone(browser: webdriver):
     wait.until(EC.visibility_of_element_located((By.ID, "password"))).send_keys(
         os.environ["LKQ_PASSWORD"], Keys.ENTER
     )
-
-    # optional MFA
-    try:
-        otp = WebDriverWait(browser, 8).until(
-            EC.visibility_of_element_located((By.ID, "otp"))
-        )
-        otp.send_keys(input("Enter LKQ OTP code: "), Keys.ENTER)
-    except Exception:
-        pass
 
 
 def hollanderField(browser: webdriver, hollander: str):
@@ -75,7 +58,6 @@ def stripInfo(browser: webdriver, rim: Rim):
         grid = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, css)))
         return [t.text for t in grid.find_elements(By.TAG_NAME, "mat-grid-tile")]
 
-    # size / bolt‑pattern / offset
     try:
         dim = wait.until(
             EC.visibility_of_element_located(
@@ -86,7 +68,6 @@ def stripInfo(browser: webdriver, rim: Rim):
     except Exception:
         print(f"Failed dimension scrape for {rim.sku}", file=sys.stderr)
 
-    # fitment + description
     try:
         fitment = matgrid(
             r'//*[@id="search-results-container"]/div/div/app-product-card[1]/div/section/div[2]/div[2]/mat-grid-list'
@@ -107,7 +88,6 @@ def stripInfo(browser: webdriver, rim: Rim):
     )
     rim.model = fitment
 
-    # OEM IDs
     browser.find_element(By.TAG_NAME, "html").send_keys(Keys.TAB, Keys.RIGHT, Keys.ENTER)
     oem_raw = matgrid(r"#search-results-container mat-grid-list")
     rim.oemID = [x for x in oem_raw if x.strip() and x not in fitment]
@@ -118,30 +98,29 @@ def addRejected(hollander: str):
         csv.writer(f).writerow(["NF", hollander])
 
 
-# ───────────────────────── paths ─────────────────────────
+# paths
 inputFile     = os.path.join(os.getcwd(), "data", "input.csv")
 outputFile    = os.path.join(os.getcwd(), "data", "output.csv")
 unmatchedFile = os.path.join(os.getcwd(), "data", "unmatchedRims.csv")
 allRims: List[Rim] = []
 hollanders: List[str] = []
 
-# ───────────────────────── read CSV safely ─────────────────────────
-with open(inputFile, newline="") as f:
+# read input.csv (handles UTF‑8 BOM)
+with open(inputFile, newline="", encoding="utf-8-sig") as f:
     for row in csv.DictReader(f):
-        sku = row.get("sku", "").strip()
+        sku = row.get("sku") or row.get("SKU") or row.get("\ufeffsku") or ""
+        sku = sku.strip()
         if sku and sku not in hollanders:
             hollanders.append(sku)
 
 if not hollanders:
-    print("⚠️  input.csv had no SKUs – exiting.")
-    sys.exit(0)
+    raise RuntimeError("input.csv had no SKUs – aborting run.")
 
-total = len(hollanders)
 browser = startSelenium(headless=True)
 getKeystone(browser)
 
 for idx, holl in enumerate(hollanders, start=1):
-    print(f"{idx}/{total} – {holl}")
+    print(f"{idx}/{len(hollanders)} – {holl}")
     rim = Rim(holl)
     hollanderField(browser, rim.sku)
     stripInfo(browser, rim)
@@ -149,7 +128,6 @@ for idx, holl in enumerate(hollanders, start=1):
 
 browser.quit()
 
-# ───────────────────────── write results ─────────────────────────
 with open(outputFile, "w", newline="") as f:
     w = csv.writer(f)
     w.writerow(
