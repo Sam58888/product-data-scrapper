@@ -1,13 +1,10 @@
-# Rim Class Import
 from rim import Rim
 import functions as fn
 
-# Std‑lib
 import csv, os, sys
 from time import sleep
-from typing import List
+from typing import List, Tuple
 
-# Selenium
 from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.options import Options
@@ -16,12 +13,11 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 
 
-# ───────────────────────── Selenium helper ─────────────────────────
+# ───────────────────────── Selenium bootstrap ─────────────────────────
 def startSelenium(headless: bool = True) -> webdriver.Chrome:
     opts = Options()
     if headless:
         opts.add_argument("--headless=new")
-    # disguise as real Chrome
     opts.add_argument(
         "user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/137 Safari/537.36"
@@ -35,63 +31,64 @@ def startSelenium(headless: bool = True) -> webdriver.Chrome:
 
 
 # ───────────────────────── Keystone login ─────────────────────────
+def wait_for_first(
+    wait: WebDriverWait, locators: List[Tuple[str, str]]
+):  # helper to try many locators
+    for by, sel in locators:
+        try:
+            return wait.until(EC.visibility_of_element_located((by, sel)))
+        except Exception:
+            continue
+    raise RuntimeError("None of the locators matched the page")
+
+
 def getKeystone(browser: webdriver.Chrome):
-    """
-    Logs into the LKQ Keystone portal.  Works with stock, Okta, or Azure AD
-    login pages.  Saves both HTML and PNG so we can debug if selectors fail.
-    """
     wait = WebDriverWait(browser, 45)
     browser.get("https://portal.lkqcorp.com")
 
-    # dump first page
+    # save the first page for debugging
     with open("login_page.html", "w", encoding="utf-8") as f:
         f.write(browser.page_source)
     browser.save_screenshot("login_page.png")
 
-    # --- 1) username field ---
-    try:
-        user_field = wait.until(
-            EC.visibility_of_any_elements_located(
-                (
-                    (By.ID, "username"),               # generic
-                    (By.ID, "okta-signin-username"),   # Okta
-                    (By.NAME, "loginfmt"),             # Azure
-                )
-            )
-        )[0]
-        user_field.clear()
-        user_field.send_keys(os.environ["LKQ_USERNAME"])
-    except Exception as e:
-        raise RuntimeError("Username field not found – inspect login_page.html") from e
+    # 1️⃣  USER ID  -----------------------------------------------------
+    user_locators = [
+        (By.ID, "userId"),               # LKQ customer portal
+        (By.ID, "username"),             # generic
+        (By.ID, "okta-signin-username"), # Okta
+        (By.NAME, "loginfmt"),           # Azure
+        (By.CSS_SELECTOR, "input[type=email]"),
+        (By.CSS_SELECTOR, "input[type=text]"),
+    ]
+    user_field = wait_for_first(wait, user_locators)
+    user_field.clear()
+    user_field.send_keys(os.environ["LKQ_USERNAME"])
 
-    # click “Next/Submit” if present
+    # click the username‑submit button if present
     for by, sel in [
-        (By.ID, "next"),
-        (By.ID, "idSIButton9"),               # Azure
-        (By.CSS_SELECTOR, "input[type=submit]"),
+        (By.ID, "submitUsername"),
+        (By.CSS_SELECTOR, "button[type=submit]"),
+        (By.XPATH, "//button[normalize-space()='SUBMIT USERNAME']"),
     ]:
         try:
-            browser.find_element(by, sel).click()
-            break
+            btn = browser.find_element(by, sel)
+            if btn.is_enabled():
+                btn.click()
+                break
         except Exception:
-            pass  # button not on this page
+            pass
 
-    # --- 2) password field ---
-    try:
-        pwd_field = wait.until(
-            EC.visibility_of_any_elements_located(
-                (
-                    (By.ID, "password"),
-                    (By.ID, "okta-signin-password"),
-                    (By.NAME, "passwd"),              # Azure
-                )
-            )
-        )[0]
-        pwd_field.send_keys(os.environ["LKQ_PASSWORD"], Keys.ENTER)
-    except Exception as e:
-        raise RuntimeError("Password field not found – inspect login_page.html") from e
+    # 2️⃣  PASSWORD  ----------------------------------------------------
+    pwd_locators = [
+        (By.ID, "password"),
+        (By.ID, "okta-signin-password"),
+        (By.NAME, "passwd"),             # Azure
+        (By.CSS_SELECTOR, "input[type=password]"),
+    ]
+    pwd_field = wait_for_first(wait, pwd_locators)
+    pwd_field.send_keys(os.environ["LKQ_PASSWORD"], Keys.ENTER)
 
-    # optional MFA (ignored if not present)
+    # optional MFA field (ignored if not present)
     try:
         otp = WebDriverWait(browser, 8).until(
             EC.visibility_of_element_located((By.ID, "otp"))
@@ -148,20 +145,19 @@ def stripInfo(browser: webdriver.Chrome, rim: Rim):
     )
     rim.model = fitment
 
-    # OEM IDs
     browser.find_element(By.TAG_NAME, "html").send_keys(Keys.TAB, Keys.RIGHT, Keys.ENTER)
     oem_raw = matgrid(r"#search-results-container mat-grid-list")
     rim.oemID = [x for x in oem_raw if x.strip() and x not in fitment]
 
 
-# ───────────────────────── File paths ─────────────────────────
+# ───────────────────────── paths ─────────────────────────
 inputFile     = os.path.join(os.getcwd(), "data", "input.csv")
 outputFile    = os.path.join(os.getcwd(), "data", "output.csv")
 unmatchedFile = os.path.join(os.getcwd(), "data", "unmatchedRims.csv")
 allRims: List[Rim] = []
 hollanders: List[str] = []
 
-# ───────────────────────── Read input.csv ─────────────────────────
+# ───────────────────────── read CSV ─────────────────────────
 with open(inputFile, newline="", encoding="utf-8-sig") as f:
     for row in csv.DictReader(f):
         sku = row.get("sku") or row.get("SKU") or row.get("\ufeffsku") or ""
@@ -172,7 +168,7 @@ with open(inputFile, newline="", encoding="utf-8-sig") as f:
 if not hollanders:
     raise RuntimeError("input.csv had no SKUs – aborting run.")
 
-# ───────────────────────── Scrape ─────────────────────────
+# ───────────────────────── scrape ─────────────────────────
 browser = startSelenium(headless=True)
 getKeystone(browser)
 
@@ -185,7 +181,7 @@ for idx, holl in enumerate(hollanders, start=1):
 
 browser.quit()
 
-# ───────────────────────── Write results ─────────────────────────
+# ───────────────────────── write CSV ─────────────────────────
 with open(outputFile, "w", newline="") as f:
     w = csv.writer(f)
     w.writerow(
