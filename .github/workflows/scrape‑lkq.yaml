@@ -76,7 +76,8 @@ jobs:
         curl -sS -u "$FTP_USER:$FTP_PASS" \
           "ftp://$FTP_HOST${{ github.event.inputs.ftp_path || '/webscrapper/input.csv' }}" \
           --output data/input.csv
-
+    - name: Debug input
+      run: cat data/input.csv
     # ───────────── Run the scraper ─────────────
     - name: Run scraper
       run: |
