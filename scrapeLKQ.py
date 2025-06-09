@@ -31,64 +31,59 @@ def startSelenium(headless: bool = True) -> webdriver.Chrome:
 
 
 # ───────────────────────── Keystone login ─────────────────────────
-def wait_for_first(
-    wait: WebDriverWait, locators: List[Tuple[str, str]]
-):  # helper to try many locators
-    for by, sel in locators:
-        try:
-            return wait.until(EC.visibility_of_element_located((by, sel)))
-        except Exception:
-            continue
-    raise RuntimeError("None of the locators matched the page")
-
-
 def getKeystone(browser: webdriver.Chrome):
+    """
+    Handles the LKQ customer login flow:
+
+    1. Click “LKQ EMPLOYEE LOGIN”
+    2. Enter username  →  Next
+    3. Enter password  →  Enter
+    4. Optional OTP
+
+    Saves login_page.html/png for debugging.
+    """
     wait = WebDriverWait(browser, 45)
     browser.get("https://portal.lkqcorp.com")
 
-    # save the first page for debugging
+    # dump landing page
     with open("login_page.html", "w", encoding="utf-8") as f:
         f.write(browser.page_source)
     browser.save_screenshot("login_page.png")
 
-    # 1️⃣  USER ID  -----------------------------------------------------
-    user_locators = [
-        (By.ID, "userId"),               # LKQ customer portal
-        (By.ID, "username"),             # generic
-        (By.ID, "okta-signin-username"), # Okta
-        (By.NAME, "loginfmt"),           # Azure
-        (By.CSS_SELECTOR, "input[type=email]"),
-        (By.CSS_SELECTOR, "input[type=text]"),
-    ]
-    user_field = wait_for_first(wait, user_locators)
+    # 0️⃣  click the blue employee‑login button
+    emp_btn = wait.until(
+        EC.element_to_be_clickable(
+            (
+                By.XPATH,
+                "//button[contains(translate(., "
+                "'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),"
+                "'LKQ EMPLOYEE LOGIN')]",
+            )
+        )
+    )
+    emp_btn.click()
+
+    # 1️⃣  username
+    user_field = wait.until(EC.visibility_of_element_located((By.ID, "username")))
     user_field.clear()
     user_field.send_keys(os.environ["LKQ_USERNAME"])
 
-    # click the username‑submit button if present
-    for by, sel in [
-        (By.ID, "submitUsername"),
-        (By.CSS_SELECTOR, "button[type=submit]"),
-        (By.XPATH, "//button[normalize-space()='SUBMIT USERNAME']"),
-    ]:
-        try:
-            btn = browser.find_element(by, sel)
-            if btn.is_enabled():
-                btn.click()
-                break
-        except Exception:
-            pass
+    # some flows need an explicit Next / Submit
+    try:
+        wait.until(
+            EC.element_to_be_clickable(
+                (By.XPATH, "//button[@type='submit' or @id='next' "
+                           "or //@type='submit'][1]")
+            )
+        ).click()
+    except Exception:
+        pass  # no intermediate button
 
-    # 2️⃣  PASSWORD  ----------------------------------------------------
-    pwd_locators = [
-        (By.ID, "password"),
-        (By.ID, "okta-signin-password"),
-        (By.NAME, "passwd"),             # Azure
-        (By.CSS_SELECTOR, "input[type=password]"),
-    ]
-    pwd_field = wait_for_first(wait, pwd_locators)
+    # 2️⃣  password
+    pwd_field = wait.until(EC.visibility_of_element_located((By.ID, "password")))
     pwd_field.send_keys(os.environ["LKQ_PASSWORD"], Keys.ENTER)
 
-    # optional MFA field (ignored if not present)
+    # 3️⃣  optional OTP
     try:
         otp = WebDriverWait(browser, 8).until(
             EC.visibility_of_element_located((By.ID, "otp"))
@@ -101,9 +96,9 @@ def getKeystone(browser: webdriver.Chrome):
 # ───────────────────────── Scraper helpers ─────────────────────────
 def hollanderField(browser: webdriver.Chrome, hollander: str):
     wait = WebDriverWait(browser, 20)
-    search = wait.until(EC.element_to_be_clickable((By.XPATH, r'//*[@id="search-field"]')))
-    search.clear()
-    search.send_keys(hollander, Keys.ENTER)
+    bar = wait.until(EC.element_to_be_clickable((By.XPATH, r'//*[@id="search-field"]')))
+    bar.clear()
+    bar.send_keys(hollander, Keys.ENTER)
     sleep(2)
 
 
@@ -125,7 +120,7 @@ def stripInfo(browser: webdriver.Chrome, rim: Rim):
     except Exception:
         print(f"Failed dimension scrape for {rim.sku}", file=sys.stderr)
 
-    # fitment & description
+    # fitment + description
     try:
         fitment = matgrid(
             r'//*[@id="search-results-container"]/div/div/app-product-card[1]/div/section/div[2]/div[2]/mat-grid-list'
@@ -150,14 +145,14 @@ def stripInfo(browser: webdriver.Chrome, rim: Rim):
     rim.oemID = [x for x in oem_raw if x.strip() and x not in fitment]
 
 
-# ───────────────────────── paths ─────────────────────────
+# ───────────────────────── file paths ─────────────────────────
 inputFile     = os.path.join(os.getcwd(), "data", "input.csv")
 outputFile    = os.path.join(os.getcwd(), "data", "output.csv")
 unmatchedFile = os.path.join(os.getcwd(), "data", "unmatchedRims.csv")
 allRims: List[Rim] = []
 hollanders: List[str] = []
 
-# ───────────────────────── read CSV ─────────────────────────
+# read CSV (removes UTF‑8 BOM)
 with open(inputFile, newline="", encoding="utf-8-sig") as f:
     for row in csv.DictReader(f):
         sku = row.get("sku") or row.get("SKU") or row.get("\ufeffsku") or ""
@@ -181,7 +176,7 @@ for idx, holl in enumerate(hollanders, start=1):
 
 browser.quit()
 
-# ───────────────────────── write CSV ─────────────────────────
+# ───────────────────────── write output.csv ─────────────────────────
 with open(outputFile, "w", newline="") as f:
     w = csv.writer(f)
     w.writerow(
