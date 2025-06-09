@@ -67,7 +67,7 @@ jobs:
     - name: Install pip packages
       run: |
         python -m pip install --upgrade pip
-        pip install selenium ftplib
+        pip install selenium
 
     # ───────────── Pull the SKU list ─────────────
     - name: Fetch input.csv from FTP
