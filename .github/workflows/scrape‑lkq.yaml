@@ -1,20 +1,20 @@
 name: scrape‑lkq
 
 on:
-  schedule:               # nightly run – adjust as needed
-    - cron: '5 3 * * *'
-  workflow_dispatch:      # manual trigger button
+  schedule:                       # nightly run – change if you prefer
+    - cron: '5 3 * * *'           # 03 : 05 UTC
+  workflow_dispatch:              # manual trigger button
     inputs:
       ftp_path:
-        description: "FTP path for input.csv"
-        default: "/incoming/input.csv"
+        description: "FTP path to input.csv"
+        default: "/webscrapper/input.csv"   # <- your folder from the screenshot
         required: false
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
 
-    env:                  # secrets go in repo Settings → Secrets → Actions
+    env:                          # repo → Settings → Secrets and variables → Actions
       FTP_HOST:     ${{ secrets.FTP_HOST }}
       FTP_USER:     ${{ secrets.FTP_USER }}
       FTP_PASS:     ${{ secrets.FTP_PASS }}
@@ -22,17 +22,18 @@ jobs:
       LKQ_PASSWORD: ${{ secrets.LKQ_PASSWORD }}
 
     steps:
-
+    # ────────────── code checkout ──────────────
     - uses: actions/checkout@v4
 
-    # ----- Chrome + chromedriver that matches the installed browser -----
+    # ────────────── Chrome + chromedriver (Option A) ──────────────
     - name: Install Chrome & chromedriver
       run: |
         sudo apt-get update -qq
-        sudo apt-get install -y wget unzip xvfb libxi6 libgconf-2-4
+        # libgconf‑2‑4 removed – not required for recent headless Chrome
+        sudo apt-get install -y wget unzip xvfb libxi6
         wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
         echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" \
-           | sudo tee /etc/apt/sources.list.d/google-chrome.list
+          | sudo tee /etc/apt/sources.list.d/google-chrome.list
         sudo apt-get update -qq
         sudo apt-get install -y google-chrome-stable
         MAJOR=$(google-chrome --version | grep -oP '\d+' | head -1)
@@ -41,35 +42,36 @@ jobs:
         chmod +x $HOME/.local/bin/chromedriver
         echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-    # ----- Python environment -----
+    # ────────────── Python env ──────────────
     - uses: actions/setup-python@v5
-      with: { python-version: '3.11' }
+      with:
+        python-version: '3.11'
 
     - name: Install pip packages
       run: |
         python -m pip install --upgrade pip
         pip install selenium ftplib
 
-    # ----- Pull the SKU list from the FTP drop -----
-    - name: Fetch input.csv
+    # ────────────── Pull the SKU list ──────────────
+    - name: Fetch input.csv from FTP
       run: |
         mkdir -p data
         curl -sS -u "$FTP_USER:$FTP_PASS" \
-          "ftp://$FTP_HOST${{ github.event.inputs.ftp_path || '/incoming/input.csv' }}" \
+          "ftp://$FTP_HOST${{ github.event.inputs.ftp_path || '/webscrapper/input.csv' }}" \
           --output data/input.csv
 
-    # ----- Headless Selenium run -----
+    # ────────────── Run the scraper ──────────────
     - name: Run scraper
       run: |
         xvfb-run -a python scrapeLKQ.py
       env:
         DISPLAY: ':99'
 
-    # ----- Save results -----
+    # ────────────── Keep the results ──────────────
     - uses: actions/upload-artifact@v4
       with:
         name: scrape-output
         path: |
           data/output.csv
-          data/unmatchedRims.csv   # “not found” SKUs
+          data/unmatchedRims.csv
           images/
