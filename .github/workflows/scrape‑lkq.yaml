@@ -24,21 +24,36 @@ jobs:
     # ───────────── code checkout ─────────────
     - uses: actions/checkout@v4
 
-    # ───────────── Chrome + chromedriver ─────────────
+    # ───────────── Chrome + chromedriver (robust) ─────────────
     - name: Install Chrome & chromedriver
       run: |
+        set -eux
         sudo apt-get update -qq
         sudo apt-get install -y wget unzip xvfb libxi6
+        # ---- add Google Chrome repo ----
         wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
         echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" \
           | sudo tee /etc/apt/sources.list.d/google-chrome.list
         sudo apt-get update -qq
         sudo apt-get install -y google-chrome-stable
-        CHROME_VERSION=$(google-chrome --version | awk '{print $3}')
-        CHROME_MAJOR=${CHROME_VERSION%%.*}
-        DRIVER_VERSION=$(curl -s "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_MAJOR}")
-        wget -q "https://chromedriver.storage.googleapis.com/${DRIVER_VERSION}/chromedriver_linux64.zip" \
-          -O /tmp/chromedriver.zip
+
+        # ---- fetch the matching chromedriver ----
+        CHROME_VERSION=$(google-chrome --version | awk '{print $3}')   # e.g. 137.0.7151.68
+        CHROME_MAJOR=${CHROME_VERSION%%.*}                             # e.g. 137
+
+        CFT_URL="https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/${CHROME_VERSION}/linux64/chromedriver-linux64.zip"
+
+        if curl -s --head --fail "$CFT_URL" >/dev/null; then
+          echo "✓ Using Chrome‑for‑Testing driver"
+          wget -q "$CFT_URL" -O /tmp/chromedriver.zip
+        else
+          echo "ℹ️  CFT driver not found, falling back to LATEST_RELEASE"
+          DRIVER_VERSION=$(curl -s "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_MAJOR}" \
+                          || curl -s https://chromedriver.storage.googleapis.com/LATEST_RELEASE)
+          wget -q "https://chromedriver.storage.googleapis.com/${DRIVER_VERSION}/chromedriver_linux64.zip" \
+            -O /tmp/chromedriver.zip
+        fi
+
         unzip -q /tmp/chromedriver.zip -d $HOME/.local/bin
         chmod +x $HOME/.local/bin/chromedriver
         echo "$HOME/.local/bin" >> $GITHUB_PATH
