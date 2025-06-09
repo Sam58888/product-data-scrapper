@@ -26,22 +26,26 @@ jobs:
     - uses: actions/checkout@v4
 
     # ────────────── Chrome + chromedriver (Option A) ──────────────
-    - name: Install Chrome & chromedriver
+      - name: Install Chrome & chromedriver
       run: |
+        # ---- system packages (libgconf‑2‑4 still not needed) ----
         sudo apt-get update -qq
-        # libgconf‑2‑4 removed – not required for recent headless Chrome
         sudo apt-get install -y wget unzip xvfb libxi6
+        # ---- add Google Chrome repo ----
         wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
         echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" \
           | sudo tee /etc/apt/sources.list.d/google-chrome.list
         sudo apt-get update -qq
         sudo apt-get install -y google-chrome-stable
-        MAJOR=$(google-chrome --version | grep -oP '\d+' | head -1)
-        wget -q https://chromedriver.storage.googleapis.com/${MAJOR}.0.0/chromedriver_linux64.zip -O /tmp/cd.zip
-        unzip -q /tmp/cd.zip -d $HOME/.local/bin
+        # ---- fetch the matching chromedriver ----
+        CHROME_VERSION=$(google-chrome --version | awk '{print $3}')
+        CHROME_MAJOR=${CHROME_VERSION%%.*}
+        DRIVER_VERSION=$(curl -s "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_MAJOR}")
+        wget -q "https://chromedriver.storage.googleapis.com/${DRIVER_VERSION}/chromedriver_linux64.zip" \
+          -O /tmp/chromedriver.zip
+        unzip -q /tmp/chromedriver.zip -d $HOME/.local/bin
         chmod +x $HOME/.local/bin/chromedriver
         echo "$HOME/.local/bin" >> $GITHUB_PATH
-
     # ────────────── Python env ──────────────
     - uses: actions/setup-python@v5
       with:
