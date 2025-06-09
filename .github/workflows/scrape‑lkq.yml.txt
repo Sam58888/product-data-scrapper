@@ -1,0 +1,75 @@
+name: scrape‑lkq
+
+on:
+  schedule:               # nightly run – adjust as needed
+    - cron: '5 3 * * *'
+  workflow_dispatch:      # manual trigger button
+    inputs:
+      ftp_path:
+        description: "FTP path for input.csv"
+        default: "/incoming/input.csv"
+        required: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    env:                  # secrets go in repo Settings → Secrets → Actions
+      FTP_HOST:     ${{ secrets.FTP_HOST }}
+      FTP_USER:     ${{ secrets.FTP_USER }}
+      FTP_PASS:     ${{ secrets.FTP_PASS }}
+      LKQ_USERNAME: ${{ secrets.LKQ_USERNAME }}
+      LKQ_PASSWORD: ${{ secrets.LKQ_PASSWORD }}
+
+    steps:
+
+    - uses: actions/checkout@v4
+
+    # ----- Chrome + chromedriver that matches the installed browser -----
+    - name: Install Chrome & chromedriver
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y wget unzip xvfb libxi6 libgconf-2-4
+        wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+        echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" \
+           | sudo tee /etc/apt/sources.list.d/google-chrome.list
+        sudo apt-get update -qq
+        sudo apt-get install -y google-chrome-stable
+        MAJOR=$(google-chrome --version | grep -oP '\d+' | head -1)
+        wget -q https://chromedriver.storage.googleapis.com/${MAJOR}.0.0/chromedriver_linux64.zip -O /tmp/cd.zip
+        unzip -q /tmp/cd.zip -d $HOME/.local/bin
+        chmod +x $HOME/.local/bin/chromedriver
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+    # ----- Python environment -----
+    - uses: actions/setup-python@v5
+      with: { python-version: '3.11' }
+
+    - name: Install pip packages
+      run: |
+        python -m pip install --upgrade pip
+        pip install selenium ftplib
+
+    # ----- Pull the SKU list from the FTP drop -----
+    - name: Fetch input.csv
+      run: |
+        mkdir -p data
+        curl -sS -u "$FTP_USER:$FTP_PASS" \
+          "ftp://$FTP_HOST${{ github.event.inputs.ftp_path || '/incoming/input.csv' }}" \
+          --output data/input.csv
+
+    # ----- Headless Selenium run -----
+    - name: Run scraper
+      run: |
+        xvfb-run -a python scrapeLKQ.py
+      env:
+        DISPLAY: ':99'
+
+    # ----- Save results -----
+    - uses: actions/upload-artifact@v4
+      with:
+        name: scrape-output
+        path: |
+          data/output.csv
+          data/unmatchedRims.csv   # “not found” SKUs
+          images/
